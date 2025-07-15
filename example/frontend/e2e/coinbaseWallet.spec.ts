@@ -122,7 +122,6 @@ test.describe("Coinbase Wallet Transaction Handling", () => {
 
     // First connect to the dapp
     await coinbase.handleAction(BaseActionType.CONNECT_TO_DAPP)
-
     await inputTransactionDetails(page)
     // Trigger the transaction, wait for the popup
     const [notificationPopup] = await Promise.all([
@@ -146,6 +145,7 @@ test.describe("Coinbase Wallet Transaction Handling", () => {
         notificationPopup,
       )
     console.log("Notification type after transaction:", notifType)
+    await page.waitForTimeout(3000)
 
     await coinbase.handleAction(BaseActionType.HANDLE_TRANSACTION, {
       approvalType: ActionApprovalType.APPROVE,
@@ -156,7 +156,6 @@ test.describe("Coinbase Wallet Transaction Handling", () => {
 
   test("should be able to reject a transaction", async ({ page, coinbase }) => {
     if (!coinbase) throw new Error("Coinbase wallet not initialized")
-
     //click connect button
     await page.getByTestId("ockConnectButton").click()
 
