@@ -13,15 +13,43 @@ export async function importWallet(
   password: string,
   _username?: string,
 ): Promise<void> {
-  console.log("Starting wallet import process for Phantom...")
-
   try {
-    // Wait for the extension UI to be ready
-    await page.waitForLoadState("networkidle")
+    // Validate page is still open before starting
+    if (page.isClosed()) {
+      throw new Error(
+        "Phantom page was closed before wallet import could begin",
+      )
+    }
+
+    console.log("[Phantom Import] Starting wallet import process...")
+    console.log(`[Phantom Import] Current URL: ${page.url()}`)
+
+    // Wait for the extension UI to be ready with longer timeout in CI
+    const isCI =
+      process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+    const timeout = isCI ? 30000 : 15000
+
+    try {
+      await page.waitForLoadState("networkidle", { timeout })
+    } catch (error) {
+      console.warn(
+        "[Phantom Import] NetworkIdle wait failed, continuing anyway:",
+        error,
+      )
+    }
+
+    // Validate page is still open after networkidle wait
+    if (page.isClosed()) {
+      throw new Error("Phantom page was closed during networkidle wait")
+    }
 
     // Step 1: Wait for and click "I already have a wallet" button
+    console.log(
+      "[Phantom Import] Looking for 'I already have a wallet' button...",
+    )
     await page.waitForSelector('button:has-text("I already have a wallet")', {
       state: "visible",
+      timeout,
     })
     await page.click('button:has-text("I already have a wallet")')
     await page.waitForLoadState("networkidle")
@@ -35,7 +63,6 @@ export async function importWallet(
 
     // Step 3: Enter seed phrase (split into individual words for each input)
     const words = seedPhrase.trim().split(/\s+/)
-    console.log(`Entering ${words.length} words into individual input boxes`)
 
     // Fill each word into its respective input box
     for (let i = 0; i < words.length; i++) {
@@ -43,11 +70,10 @@ export async function importWallet(
       // Wait for each input to be available before filling
       await input.waitFor({ state: "visible" })
       await input.fill(words[i])
-      console.log(`Entered word ${i + 1}: "${words[i]}"`)
     }
 
     // Wait for all inputs to be properly filled and Continue button to be enabled
-    await page.waitForTimeout(1000) // Short wait for validation to complete
+    await page.waitForTimeout(3000) // Short wait for validation to complete
 
     // Step 4: Wait for and click Continue button (after seed phrase)
     const firstContinueBtn = page.getByTestId("onboarding-form-submit-button")
@@ -55,7 +81,7 @@ export async function importWallet(
     await firstContinueBtn.click()
     await page.waitForLoadState("networkidle")
 
-    await page.waitForTimeout(3000)
+    await page.waitForTimeout(10000)
 
     // Step 5: Wait for and click Continue button again (second Continue button)
     const secondContinueBtn = page.getByTestId("onboarding-form-submit-button")
@@ -105,8 +131,24 @@ export async function importWallet(
     // }
 
     // Step 11: Wait for and click "Get Started" to finish setup
+    console.log("[Phantom Import] Looking for 'Get Started' button...")
+
+    // Validate page is still open before final step
+    if (page.isClosed()) {
+      throw new Error("Phantom page was closed before 'Get Started' step")
+    }
+
     const getStartedBtn = page.locator('button:has-text("Get Started")')
-    await getStartedBtn.waitFor({ state: "visible" })
+    await getStartedBtn.waitFor({ state: "visible", timeout })
+
+    // Final check before clicking
+    if (page.isClosed()) {
+      throw new Error(
+        "Phantom page was closed while waiting for 'Get Started' button",
+      )
+    }
+
+    console.log("[Phantom Import] Clicking 'Get Started' button...")
     await getStartedBtn.click()
 
     // After "Get Started", Phantom transitions to main UI and closes the onboarding page
@@ -117,10 +159,26 @@ export async function importWallet(
       // Expected: Page closes after transitioning to main extension UI
       console.log("Onboarding page closed (expected behavior)")
     }
-
-    console.log("Phantom wallet import completed successfully!")
   } catch (error) {
     console.error("Error during Phantom wallet import:", error)
-    throw new Error(`Failed to import Phantom wallet: ${error}`)
+
+    // Add debug information
+    try {
+      console.error(`[Phantom Import Debug] Page closed: ${page.isClosed()}`)
+      if (!page.isClosed()) {
+        console.error(`[Phantom Import Debug] Current URL: ${page.url()}`)
+        console.error(
+          `[Phantom Import Debug] Page title: ${await page
+            .title()
+            .catch(() => "Unable to get title")}`,
+        )
+      }
+    } catch (debugError) {
+      console.error("Unable to capture debug info:", debugError)
+    }
+
+    throw new Error(
+      `Failed to import Phantom wallet: ${(error as Error).message}`,
+    )
   }
 }

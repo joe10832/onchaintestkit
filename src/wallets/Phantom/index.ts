@@ -11,6 +11,7 @@ import {
 import { PhantomConfig } from "../types"
 import { NetworkConfig } from "../types"
 import { HomePage, NotificationPage, OnboardingPage } from "./pages"
+import type { SupportedChain } from "./types"
 
 // Extend BaseActionType with Phantom-specific actions
 export enum PhantomSpecificActionType {
@@ -47,6 +48,10 @@ export class PhantomWallet extends BaseWallet {
 
   private notificationPage: NotificationPage
 
+  get browserContext(): BrowserContext {
+    return this.context
+  }
+
   constructor(
     walletConfig: PhantomConfig,
     context: BrowserContext,
@@ -82,8 +87,12 @@ export class PhantomWallet extends BaseWallet {
     // Wait for extension page to load and get extension ID
     const extensionId = await getExtensionId(context, "Phantom")
 
-    // Wait a bit more for extension to initialize
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    const isCI =
+      process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+
+    // Wait longer for extension to initialize in CI
+    const initDelay = isCI ? 3000 : 1000
+    await new Promise(resolve => setTimeout(resolve, initDelay))
 
     // Check if there's already a page with the extension loaded
     let phantomPage = context
@@ -93,11 +102,17 @@ export class PhantomWallet extends BaseWallet {
     if (!phantomPage) {
       phantomPage = await context.newPage()
       // Wait for page to be ready
-      await phantomPage.waitForLoadState("domcontentloaded")
+      await phantomPage.waitForLoadState("domcontentloaded", { timeout: 15000 })
+    }
+
+    // Validate page is still open before proceeding
+    if (phantomPage.isClosed()) {
+      throw new Error("Phantom extension page was closed during initialization")
     }
 
     // Check current URL to determine the state
     const currentUrl = phantomPage.url()
+    console.log(`[Phantom Init] Current URL: ${currentUrl}`)
 
     // If we're on onboarding.html or about:blank, or no extension URL, try different approaches
     if (
@@ -109,11 +124,18 @@ export class PhantomWallet extends BaseWallet {
       const onboardingUrl = `chrome-extension://${extensionId}/onboarding.html`
 
       try {
-        await phantomPage.goto(onboardingUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 10000,
-        })
-        await phantomPage.waitForLoadState("networkidle", { timeout: 10000 })
+        if (!phantomPage.isClosed()) {
+          await phantomPage.goto(onboardingUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          })
+
+          if (!phantomPage.isClosed()) {
+            await phantomPage.waitForLoadState("networkidle", {
+              timeout: 15000,
+            })
+          }
+        }
       } catch (error) {
         console.error("Failed to load onboarding page:", error)
 
@@ -126,15 +148,22 @@ export class PhantomWallet extends BaseWallet {
         let loaded = false
         for (const altUrl of altUrls) {
           try {
+            if (phantomPage.isClosed()) {
+              phantomPage = await context.newPage()
+            }
+
             await phantomPage.goto(altUrl, {
               waitUntil: "domcontentloaded",
-              timeout: 10000,
+              timeout: 15000,
             })
-            await phantomPage.waitForLoadState("networkidle", {
-              timeout: 10000,
-            })
-            loaded = true
-            break
+
+            if (!phantomPage.isClosed()) {
+              await phantomPage.waitForLoadState("networkidle", {
+                timeout: 15000,
+              })
+              loaded = true
+              break
+            }
           } catch (altError) {
             const errorMessage =
               altError instanceof Error ? altError.message : String(altError)
@@ -151,7 +180,9 @@ export class PhantomWallet extends BaseWallet {
     } else {
       // Already on a phantom extension page, just wait for it to be ready
       try {
-        await phantomPage.waitForLoadState("networkidle", { timeout: 10000 })
+        if (!phantomPage.isClosed()) {
+          await phantomPage.waitForLoadState("networkidle", { timeout: 15000 })
+        }
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error)
@@ -160,14 +191,24 @@ export class PhantomWallet extends BaseWallet {
       }
     }
 
+    // Final validation that page is still open
+    if (phantomPage.isClosed()) {
+      throw new Error("Phantom extension page was closed after initialization")
+    }
+
     // Close any other pages
     const pages = context.pages()
     for (const page of pages) {
-      if (page !== phantomPage) {
-        await page.close()
+      if (page !== phantomPage && !page.isClosed()) {
+        try {
+          await page.close()
+        } catch (_error) {
+          // Ignore errors when closing pages
+        }
       }
     }
 
+    console.log(`[Phantom Init] Final URL: ${phantomPage.url()}`)
     return { phantomPage, phantomContext: context }
   }
 
@@ -177,37 +218,89 @@ export class PhantomWallet extends BaseWallet {
   private async navigateToMainPopup(): Promise<void> {
     try {
       const popupUrl = `chrome-extension://${this.extensionId}/popup.html`
+
+      // First, try to navigate the current page if it's still open
       try {
-        await this.page.goto(popupUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        })
-        await this.page.waitForLoadState("networkidle", { timeout: 15000 })
-        return
+        if (!this.page.isClosed()) {
+          await this.page.goto(popupUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          })
+          if (!this.page.isClosed()) {
+            await this.page.waitForLoadState("networkidle", { timeout: 15000 })
+            return
+          }
+        }
       } catch (_navigationError) {
         console.log("Current page navigation failed.")
       }
 
-      // Only try to create a new page if not in CI
+      // If current page is closed or navigation failed, find or create a new page
       const isCI =
         process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+
       if (isCI) {
-        console.log(
-          "Skipping new tab creation in CI environment; using current page as fallback.",
+        // In CI, find the remaining extension page after onboarding closes the old one
+        const pages = this.context.pages()
+        const extensionPage = pages.find(p =>
+          p.url().includes(`chrome-extension://${this.extensionId}/popup.html`),
         )
-      } else {
-        const newPage = await this.context.newPage()
-        await newPage.goto(popupUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        })
-        await newPage.waitForLoadState("networkidle", { timeout: 15000 })
-        this.page = newPage
-        this.homePage = new HomePage(newPage)
-        this.onboardingPage = new OnboardingPage(newPage)
-        this.notificationPage = new NotificationPage(newPage)
+
+        if (extensionPage && !extensionPage.isClosed()) {
+          this.page = extensionPage
+          this.homePage = new HomePage(extensionPage)
+          this.onboardingPage = new OnboardingPage(extensionPage)
+          this.notificationPage = new NotificationPage(extensionPage)
+          return
+        }
+
+        // If no popup.html page exists, look for any extension page
+        const anyExtensionPage = pages.find(
+          p =>
+            p.url().includes(`chrome-extension://${this.extensionId}`) &&
+            !p.isClosed(),
+        )
+
+        if (anyExtensionPage) {
+          // Navigate this page to popup.html
+          await anyExtensionPage.goto(popupUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          })
+          await anyExtensionPage.waitForLoadState("networkidle", {
+            timeout: 15000,
+          })
+
+          this.page = anyExtensionPage
+          this.homePage = new HomePage(anyExtensionPage)
+          this.onboardingPage = new OnboardingPage(anyExtensionPage)
+          this.notificationPage = new NotificationPage(anyExtensionPage)
+          return
+        }
+
+        throw new Error(
+          "Could not find open Phantom extension page after onboarding in CI.",
+        )
+      }
+
+      // Only in local/dev: create a new page
+      const newPage = await this.context.newPage()
+      await newPage.goto(popupUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      })
+      if (newPage.isClosed()) {
+        console.log(
+          "Phantom main popup closed after newPage.goto, skipping waitForLoadState.",
+        )
         return
       }
+      await newPage.waitForLoadState("networkidle", { timeout: 15000 })
+      this.page = newPage
+      this.homePage = new HomePage(newPage)
+      this.onboardingPage = new OnboardingPage(newPage)
+      this.notificationPage = new NotificationPage(newPage)
+      return
     } catch (error) {
       console.error(
         "Failed to navigate to main popup, but continuing in CI:",
@@ -232,6 +325,10 @@ export class PhantomWallet extends BaseWallet {
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       try {
+        // Check if running in CI environment
+        const isCI =
+          process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+
         // Get phantom extension path (assumes prepare-phantom.mjs was run first)
         const cacheDir = path.join(
           process.cwd(),
@@ -240,6 +337,22 @@ export class PhantomWallet extends BaseWallet {
           "phantom-extension",
         )
         const phantomPath = path.join(cacheDir, `phantom-${PHANTOM_VERSION}`)
+
+        // Verify extension files exist
+        const fs = await import("fs")
+        if (!fs.existsSync(phantomPath)) {
+          throw new Error(
+            `Phantom extension not found at ${phantomPath}. Run 'node src/cli/prepare-phantom.mjs' first.`,
+          )
+        }
+
+        // Log extension path for debugging
+        if (isCI) {
+          console.log(`[Phantom CI] Extension path: ${phantomPath}`)
+          console.log(
+            `[Phantom CI] Extension exists: ${fs.existsSync(phantomPath)}`,
+          )
+        }
 
         const browserArgs = [
           `--disable-extensions-except=${phantomPath}`,
@@ -259,6 +372,24 @@ export class PhantomWallet extends BaseWallet {
           "--disable-web-security", // Help with extension loading
           "--disable-features=VizDisplayCompositor", // Reduce resource usage
         ]
+
+        // Add CI-specific arguments
+        if (isCI) {
+          browserArgs.push(
+            "--disable-backgrounding-occluded-windows",
+            "--disable-ipc-flooding-protection",
+            "--disable-hang-monitor",
+            "--disable-prompt-on-repost",
+            "--disable-domain-reliability",
+            "--disable-background-networking",
+            "--metrics-recording-only",
+            "--no-default-browser-check",
+            "--disable-sync",
+            "--disable-translate",
+            "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+            "--remote-debugging-port=0", // Let Chrome assign a port
+          )
+        }
 
         const context = await chromium.launchPersistentContext(contextPath, {
           headless: false,
@@ -325,10 +456,14 @@ export class PhantomWallet extends BaseWallet {
         break
 
       case BaseActionType.IMPORT_WALLET_FROM_PRIVATE_KEY:
-        await this.homePage.importPrivateKey(
+        await this.onboardingPage.importPrivateKey(
           additionalOptions.privateKey as string,
           this.config.password as string,
+          (additionalOptions.chain as SupportedChain) || "base",
+          additionalOptions.name as string,
         )
+        await this.navigateToMainPopup()
+
         break
 
       // Network actions
