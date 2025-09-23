@@ -239,10 +239,23 @@ The `LocalNodeManager` provides a comprehensive interface for managing local Anv
 
 - **Node lifecycle management**: Start and stop nodes
 - **Chain state manipulation**: Create snapshots, revert state, reset chain
+- **Fork mode**: Copy live blockchain state for realistic testing
 - **Time control**: Time travel, block mining
 - **Account management**: Set balances, impersonate accounts
 - **Network configuration**: Set gas prices, chain ID
 - **Cross-process port allocation for parallel testing**
+
+### What is Fork Mode?
+
+Fork mode lets you create a local copy of a live blockchain (like Ethereum mainnet) for testing. Think of it as downloading a snapshot of the real blockchain to test against actual smart contracts and user balances without spending real money or affecting the live network.
+
+```typescript
+// Test your dApp against real Uniswap pools!
+const node = new LocalNodeManager({
+  forkUrl: "https://mainnet.base.org",
+  forkBlockNumber: 18000000n,
+})
+```
 
 ### Parallel Test Execution
 

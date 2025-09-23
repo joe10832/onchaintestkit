@@ -67,6 +67,23 @@ interface NodeConfig {
 
 ### Fork Mode
 
+Fork mode allows you to create a local copy of an existing blockchain network (like mainnet or testnet) at a specific point in time. Think of it as taking a "snapshot" of the real blockchain and running it locally for testing.
+
+#### Why Use Fork Mode?
+
+- **Test with Real Data**: Test your dApp against real smart contracts, tokens, and user accounts
+- **Safe Testing**: Experiment without spending real money or affecting the live network
+- **Realistic Conditions**: Test edge cases with actual on-chain state
+- **Integration Testing**: Verify your app works with popular DeFi protocols like Uniswap, Aave, etc.
+
+#### How It Works
+
+When you enable fork mode, your local test node:
+1. Downloads the blockchain state from the specified block
+2. Creates a local copy you can modify freely
+3. Allows you to send transactions, deploy contracts, and test interactions
+4. Keeps the original network completely unaffected
+
 <ParamField path="forkUrl" type="string">
   URL to fork from (e.g., mainnet or testnet RPC endpoint). Enables fork mode.
   
@@ -135,20 +152,24 @@ const node = new LocalNodeManager({
 })
 ```
 
-### Fork Mainnet
+### Fork Mainnet for DeFi Testing
 
 ```typescript
+// Fork Ethereum mainnet to test against real Uniswap pools
 const node = new LocalNodeManager({
     chainId: 1,
     forkUrl: process.env.ETH_MAINNET_RPC,
-    forkBlockNumber: 18500000n,
+    forkBlockNumber: 18500000n, // Specific block for consistent testing
     hardfork: "cancun",
 })
+
+// Now you can test swaps against real Uniswap liquidity!
 ```
 
-### Base Sepolia Fork
+### Base Sepolia Fork for Staging Tests
 
 ```typescript
+// Fork Base Sepolia testnet for staging environment testing
 const node = new LocalNodeManager({
     chainId: baseSepolia.id,
     forkUrl: process.env.BASE_SEPOLIA_RPC,
@@ -156,6 +177,23 @@ const node = new LocalNodeManager({
     mnemonic: process.env.TEST_MNEMONIC,
 })
 ```
+
+### Fork with Account Funding
+
+```typescript
+// Fork mainnet and fund test accounts for realistic testing
+const node = new LocalNodeManager({
+    chainId: 1,
+    forkUrl: "https://mainnet.base.org",
+    forkBlockNumber: 18000000n,
+    defaultBalance: parseEther("100"), // Give test accounts 100 ETH
+    totalAccounts: 5,
+})
+
+await node.start()
+
+// Impersonate a whale account to test large transactions
+await node.impersonateAccount("0x..." /* whale address */)
 
 ### Manual Mining Mode
 
@@ -239,6 +277,47 @@ When no configuration is provided, these defaults are used:
   Share configuration between tests using a common config file
 </Step>
 </Steps>
+
+## Fork Mode Troubleshooting
+
+Common issues when using fork mode and their solutions:
+
+### "Fork failed" or "Cannot connect to RPC"
+
+**Problem**: The fork URL is unreachable or rate-limited.
+
+**Solutions**:
+- Check that your RPC URL is correct and accessible
+- Use a reliable RPC provider (Alchemy, Infura, QuickNode)
+- Add retry configuration: `forkRetryInterval: 1000`
+- Check your API key limits and rate limits
+
+### "Block not found" errors
+
+**Problem**: The specified fork block number doesn't exist or is too recent.
+
+**Solutions**:
+- Use a block number that's at least 10-20 blocks old
+- Check the latest block on a block explorer
+- Remove `forkBlockNumber` to fork from the latest block (less reliable)
+
+### Slow fork startup
+
+**Problem**: Fork mode takes a long time to start.
+
+**Solutions**:
+- Use a faster RPC provider
+- Fork from a more recent block (less state to download)
+- Consider using a testnet instead of mainnet for faster startup
+
+### "Nonce too high" errors
+
+**Problem**: Account nonces get out of sync when reusing forks.
+
+**Solutions**:
+- Reset the fork between tests: `await node.reset()`
+- Use snapshots for faster state reset: `await node.revert(snapshotId)`
+- Create fresh forks for each test suite
 
 ## Next Steps
 
