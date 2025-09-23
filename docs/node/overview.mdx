@@ -90,7 +90,7 @@ await node.stop()
 </Accordion>
 
 <Accordion title="Fork Mode Support">
-  Fork from mainnet or testnet at specific blocks to test against real-world state.
+  Fork from mainnet or testnet at specific blocks to test against real-world state. This creates a local copy of the live blockchain, allowing you to test with real smart contracts, tokens, and user balances without affecting the actual network or spending real money.
 </Accordion>
 
 <Accordion title="Playwright Integration">
@@ -118,16 +118,17 @@ const provider = new ethers.JsonRpcProvider(node.rpcUrl)
 ### Testing onchain Interactions
 
 ```typescript
-// Fork mainnet for realistic testing
+// Fork mainnet for realistic testing - test your dApp against real DEXs!
 const node = new LocalNodeManager({
     chainId: 1,
     forkUrl: "https://eth-mainnet.g.alchemy.com/v2/YOUR-API-KEY",
-    forkBlockNumber: 18000000n,
+    forkBlockNumber: 18000000n, // Fork from a specific block for consistent results
 })
 
 await node.start()
 
-// Test against real mainnet state
+// Test against real mainnet state - Uniswap pools, user balances, etc.
+// Your tests now work with REAL liquidity and REAL smart contracts!
 ```
 
 ### Time-Dependent Testing
